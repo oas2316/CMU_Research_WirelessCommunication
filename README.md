@@ -5,4 +5,5 @@ The design includes the development of three custom PCBs:
 1.	Receiver PCB: A handheld, wireless device equipped with an ATMEGA328 microcontroller, a LoRa module, and an OLED display to show live sensor data from the robots.
 2.	Transmitter 1 PCB: Mounted on a spherical robot, featuring an ATMEGA328, a LoRa module, and sensors for air quality (CCS811) and metal oxide gas detection (ENS160).
 3.	Transmitter 2 PCB: Also mounted on a spherical robot, incorporating an ATMEGA328, a LoRa module, a flammable gas sensor (MQS), and an I2S microphone.
+   
 The PCBs were designed to be compact (1-2 inches in all dimensions) to fit the scale of the robots. I utilized Altium Designer to create the schematics and layouts and sourced most of the required components from my research lab at CMU.
