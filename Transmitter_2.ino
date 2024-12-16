@@ -3,50 +3,29 @@
 
 // Pin Definitions for LoRa
 #define RFM95_CS 10   // Chip select pin (PB2 -> pin 16)
-#define RFM95_RST 3   // Reset pin (PD3 -> pin 5)
-#define RFM95_INT 2   // Interrupt pin (PD2 -> pin 2)
+#define RFM95_RST 1   // Reset pin (PD3 -> pin 5)
+#define RFM95_INT 2   // Interrupt pin (PD2 -> pin 4)
 
-// Pin Definitions for I2S Microphone
-#define I2S_CLOCK_PIN  5   // BCLK pin (PD5)
-#define I2S_WORD_SELECT_PIN 4  // LRCL pin (PD4)
-#define I2S_DATA_PIN  6  // DOUT pin (PD6)
-
-// MQ5 Sensor Analog Pin (A0)
-#define MQ5_PIN A0
-
-// Define buffer for I2S microphone data
-#define BUFFER_SIZE 512
-int16_t audioBuffer[BUFFER_SIZE];  // Audio data buffer
-
-// Variables to store sensor data
-float gasConcentration = 0.0;
-
-// Function to manually read I2S audio data
-void readI2SData() {
-  for (int i = 0; i < BUFFER_SIZE; i++) {
-    audioBuffer[i] = 0; // Reset buffer value
-
-    // Wait for a new frame (LRCL transition)
-    while (digitalRead(I2S_WORD_SELECT_PIN) == LOW);
-    while (digitalRead(I2S_WORD_SELECT_PIN) == HIGH);
-
-    // Read 16 bits of audio data
-    for (int bit = 0; bit < 16; bit++) {
-      if (digitalRead(I2S_DATA_PIN)) {
-        audioBuffer[i] |= (1 << (15 - bit)); // Set bit if high
-      }
-
-      // Pulse the clock to read the next bit
-      digitalWrite(I2S_CLOCK_PIN, HIGH);
-      delayMicroseconds(1); // Adjust this based on your microphone clock speed
-      digitalWrite(I2S_CLOCK_PIN, LOW);
-    }
-  }
-}
+// I2C Addresses
+#define ENS160_ADDRESS 0x53
+#define CCS811_ADDRESS 0x5A
 
 void setup() {
-  // Initialize Serial for debugging
+  // Serial for debugging
   Serial.begin(9600);
+
+  // Initialize I2C
+  Wire.begin();
+
+  // Initialize ENS160
+  if (!initializeENS160()) {
+    Serial.println("Failed to initialize ENS160!");
+  }
+
+  // Initialize CCS811
+  if (!initializeCCS811()) {
+    Serial.println("Failed to initialize CCS811!");
+  }
 
   // Initialize LoRa
   pinMode(RFM95_RST, OUTPUT);
@@ -58,47 +37,106 @@ void setup() {
   }
   LoRa.setPins(RFM95_CS, RFM95_RST, RFM95_INT);
   Serial.println("LoRa initialized!");
-
-  // Initialize I2S pins
-  pinMode(I2S_CLOCK_PIN, OUTPUT);
-  pinMode(I2S_WORD_SELECT_PIN, INPUT);
-  pinMode(I2S_DATA_PIN, INPUT);
-
-  // Initialize MQ5 sensor
-  pinMode(MQ5_PIN, INPUT);
 }
 
 void loop() {
-  // Read data from MQ5 gas sensor
-  gasConcentration = analogRead(MQ5_PIN); // Read raw value from MQ5
+  // Read data from ENS160
+  uint16_t tvoc = readENS160TVOC();
+  uint16_t co2 = readENS160CO2();
 
-  // Capture audio data from I2S microphone
-  readI2SData();
+  // Read data from CCS811
+  uint16_t ccs811TVOC = readCCS811TVOC();
+  uint16_t ccs811CO2 = readCCS811CO2();
 
   // Transmit data via LoRa
   LoRa.beginPacket();
-  LoRa.print("MQ5 Gas Concentration: ");
-  LoRa.print(gasConcentration);
-  LoRa.print(" | Audio Data: ");
-
-  // For testing, we just send the first few audio buffer values
-  for (int i = 0; i < 10; i++) {
-    LoRa.print(audioBuffer[i]);
-    LoRa.print(" ");
-  }
-
+  LoRa.print("ENS160 TVOC: ");
+  LoRa.print(tvoc);
+  LoRa.print(" ppb, CO2: ");
+  LoRa.print(co2);
+  LoRa.print(" ppm | CCS811 TVOC: ");
+  LoRa.print(ccs811TVOC);
+  LoRa.print(" ppb, CO2: ");
+  LoRa.print(ccs811CO2);
+  LoRa.println(" ppm");
   LoRa.endPacket();
 
-  // Print to Serial Monitor for debugging
-  Serial.print("MQ5 Gas: ");
-  Serial.println(gasConcentration);
-  
-  Serial.print("Audio Data(first 10 samples): ");
-  for (int i = 0; i < 10; i++) {
-    Serial.print(audioBuffer[i]);
-    Serial.print(" ");
-  }
-  Serial.println();
+  Serial.println("Data sent over LoRa.");
 
-  delay(2000); // Transmit every 2 seconds
+  delay(5000); // Delay for 5 seconds
+}
+
+// Function to initialize ENS160
+bool initializeENS160() {
+  Wire.beginTransmission(ENS160_ADDRESS);
+  Wire.write(0x00); // Example: Set Mode Register
+  Wire.write(0x02); // Set to Standard Mode
+  return (Wire.endTransmission() == 0);
+}
+
+// Function to read TVOC data from ENS160
+uint16_t readENS160TVOC() {
+  Wire.beginTransmission(ENS160_ADDRESS);
+  Wire.write(0x22); // TVOC register (consult datasheet)
+  Wire.endTransmission(false);
+  Wire.requestFrom(ENS160_ADDRESS, 2);
+
+  if (Wire.available() == 2) {
+    uint16_t tvoc = Wire.read();
+    tvoc |= (Wire.read() << 8);
+    return tvoc;
+  }
+  return 0;
+}
+
+// Function to read CO2 data from ENS160
+uint16_t readENS160CO2() {
+  Wire.beginTransmission(ENS160_ADDRESS);
+  Wire.write(0x20); // CO2 register (consult datasheet)
+  Wire.endTransmission(false);
+  Wire.requestFrom(ENS160_ADDRESS, 2);
+
+  if (Wire.available() == 2) {
+    uint16_t co2 = Wire.read();
+    co2 |= (Wire.read() << 8);
+    return co2;
+  }
+  return 0;
+}
+
+// Function to initialize CCS811
+bool initializeCCS811() {
+  Wire.beginTransmission(CCS811_ADDRESS);
+  Wire.write(0xF4); // Bootloader register
+  return (Wire.endTransmission() == 0);
+}
+
+// Function to read TVOC data from CCS811
+uint16_t readCCS811TVOC() {
+  Wire.beginTransmission(CCS811_ADDRESS);
+  Wire.write(0x02); // Status register
+  Wire.endTransmission(false);
+  Wire.requestFrom(CCS811_ADDRESS, 2);
+
+  if (Wire.available() == 2) {
+    uint16_t tvoc = Wire.read();
+    tvoc |= (Wire.read() << 8);
+    return tvoc;
+  }
+  return 0;
+}
+
+// Function to read CO2 data from CCS811
+uint16_t readCCS811CO2() {
+  Wire.beginTransmission(CCS811_ADDRESS);
+  Wire.write(0x01); // CO2 register
+  Wire.endTransmission(false);
+  Wire.requestFrom(CCS811_ADDRESS, 2);
+
+  if (Wire.available() == 2) {
+    uint16_t co2 = Wire.read();
+    co2 |= (Wire.read() << 8);
+    return co2;
+  }
+  return 0;
 }
