@@ -1,142 +1,121 @@
 #include <Wire.h>
 #include <LoRa.h>
 
-// Pin Definitions for LoRa
-#define RFM95_CS 10   // Chip select pin (PB2 -> pin 16)
-#define RFM95_RST 3   // Reset pin (PD3 -> pin 5)
-#define RFM95_INT 2   // Interrupt pin (PD2 -> pin 4)
+// LoRa Pins
+#define RFM95_CS 10
+#define RFM95_RST 3
+#define RFM95_INT 2
 
 // I2C Addresses
 #define ENS160_ADDRESS 0x53
 #define CCS811_ADDRESS 0x5A
 
 void setup() {
-  // Serial for debugging
-  Serial.begin(9600);
-
-  // Initialize I2C
   Wire.begin();
 
-  // Initialize ENS160
-  if (!initializeENS160()) {
-    Serial.println("Failed to initialize ENS160!");
-  }
-
-  // Initialize CCS811
-  if (!initializeCCS811()) {
-    Serial.println("Failed to initialize CCS811!");
-  }
-
-  // Initialize LoRa
+  // LoRa setup
   pinMode(RFM95_RST, OUTPUT);
   digitalWrite(RFM95_RST, HIGH);
+  delay(10);
+  digitalWrite(RFM95_RST, LOW);
+  delay(10);
+  digitalWrite(RFM95_RST, HIGH);
+  delay(10);
 
-  if (!LoRa.begin(915E6)) { // Frequency: 915 MHz
-    Serial.println("LoRa initialization failed!");
-    while (1);
-  }
   LoRa.setPins(RFM95_CS, RFM95_RST, RFM95_INT);
-  Serial.println("LoRa initialized!");
+  LoRa.begin(915E6);
+
+  initializeENS160();
+  initializeCCS811();
 }
 
 void loop() {
-  // Read data from ENS160
-  uint16_t tvoc = readENS160TVOC();
-  uint16_t co2 = readENS160CO2();
+  delay(2000);
 
-  // Read data from CCS811
-  uint16_t ccs811TVOC = readCCS811TVOC();
-  uint16_t ccs811CO2 = readCCS811CO2();
+  uint16_t ensTVOC = readENS160TVOC();
+  uint16_t ensCO2 = readENS160CO2();
 
-  // Transmit data via LoRa
+  uint16_t ccsTVOC = 0;
+  uint16_t ccsCO2 = 0;
+  readCCS811Data(ccsCO2, ccsTVOC);
+
+  // Send data over LoRa (compact format: CSV)
   LoRa.beginPacket();
-  LoRa.print("ENS160 TVOC: ");
-  LoRa.print(tvoc);
-  LoRa.print(" ppb, CO2: ");
-  LoRa.print(co2);
-  LoRa.print(" ppm | CCS811 TVOC: ");
-  LoRa.print(ccs811TVOC);
-  LoRa.print(" ppb, CO2: ");
-  LoRa.print(ccs811CO2);
-  LoRa.println(" ppm");
+  LoRa.print("ENS160:");
+  LoRa.print(ensTVOC);
+  LoRa.print(",");
+  LoRa.print(ensCO2);
+  LoRa.print(";CCS811:");
+  LoRa.print(ccsTVOC);
+  LoRa.print(",");
+  LoRa.print(ccsCO2);
   LoRa.endPacket();
-
-  Serial.println("Data sent over LoRa.");
-
-  delay(5000); // Delay for 5 seconds
 }
 
-// Function to initialize ENS160
+// ============ ENS160 ==============
+
 bool initializeENS160() {
+  delay(100);
   Wire.beginTransmission(ENS160_ADDRESS);
-  Wire.write(0x00); // Example: Set Mode Register
-  Wire.write(0x02); // Set to Standard Mode
-  return (Wire.endTransmission() == 0);
+  Wire.write(0x10); // Operating mode register
+  Wire.write(0x02); // Standard mode
+  return Wire.endTransmission() == 0;
 }
 
-// Function to read TVOC data from ENS160
 uint16_t readENS160TVOC() {
   Wire.beginTransmission(ENS160_ADDRESS);
-  Wire.write(0x22); // TVOC register (consult datasheet)
+  Wire.write(0x22);
   Wire.endTransmission(false);
   Wire.requestFrom(ENS160_ADDRESS, 2);
-
   if (Wire.available() == 2) {
-    uint16_t tvoc = Wire.read();
-    tvoc |= (Wire.read() << 8);
-    return tvoc;
+    uint8_t low = Wire.read();
+    uint8_t high = Wire.read();
+    return (high << 8) | low;
   }
   return 0;
 }
 
-// Function to read CO2 data from ENS160
 uint16_t readENS160CO2() {
   Wire.beginTransmission(ENS160_ADDRESS);
-  Wire.write(0x20); // CO2 register (consult datasheet)
+  Wire.write(0x20);
   Wire.endTransmission(false);
   Wire.requestFrom(ENS160_ADDRESS, 2);
-
   if (Wire.available() == 2) {
-    uint16_t co2 = Wire.read();
-    co2 |= (Wire.read() << 8);
-    return co2;
+    uint8_t low = Wire.read();
+    uint8_t high = Wire.read();
+    return (high << 8) | low;
   }
   return 0;
 }
 
-// Function to initialize CCS811
+// ============ CCS811 ==============
+
 bool initializeCCS811() {
   Wire.beginTransmission(CCS811_ADDRESS);
-  Wire.write(0xF4); // Bootloader register
-  return (Wire.endTransmission() == 0);
+  Wire.write(0xF4); // APP_START command
+  Wire.endTransmission();
+  delay(100);
+
+  Wire.beginTransmission(CCS811_ADDRESS);
+  Wire.write(0x01); // MEAS_MODE register
+  Wire.write(0x10); // 1s continuous measurement
+  return Wire.endTransmission() == 0;
 }
 
-// Function to read TVOC data from CCS811
-uint16_t readCCS811TVOC() {
+void readCCS811Data(uint16_t &co2, uint16_t &tvoc) {
   Wire.beginTransmission(CCS811_ADDRESS);
   Wire.write(0x02); // Status register
   Wire.endTransmission(false);
-  Wire.requestFrom(CCS811_ADDRESS, 2);
-
-  if (Wire.available() == 2) {
-    uint16_t tvoc = Wire.read();
-    tvoc |= (Wire.read() << 8);
-    return tvoc;
+  Wire.requestFrom(CCS811_ADDRESS, 1);
+  if (Wire.available() && (Wire.read() & 0x08)) {
+    Wire.beginTransmission(CCS811_ADDRESS);
+    Wire.write(0x00); // ALG_RESULT_DATA
+    Wire.endTransmission(false);
+    Wire.requestFrom(CCS811_ADDRESS, 8);
+    if (Wire.available() == 8) {
+      co2 = (Wire.read() << 8) | Wire.read();
+      tvoc = (Wire.read() << 8) | Wire.read();
+      Wire.read(); Wire.read(); Wire.read(); Wire.read();
+    }
   }
-  return 0;
-}
-
-// Function to read CO2 data from CCS811
-uint16_t readCCS811CO2() {
-  Wire.beginTransmission(CCS811_ADDRESS);
-  Wire.write(0x01); // CO2 register
-  Wire.endTransmission(false);
-  Wire.requestFrom(CCS811_ADDRESS, 2);
-
-  if (Wire.available() == 2) {
-    uint16_t co2 = Wire.read();
-    co2 |= (Wire.read() << 8);
-    return co2;
-  }
-  return 0;
 }
